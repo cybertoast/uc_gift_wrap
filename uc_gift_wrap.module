@@ -1,0 +1,284 @@
+<?php
+// $Id$
+
+/**
+ * @file
+ * Ubercart Gift Wrap 
+ *
+ * Provides a way to specify and charge for gift wrapping at
+ * check out time.
+ */
+
+function uc_gift_wrap_perm() {
+  return array('manage gift wrap options');
+}
+
+/**
+ * Implementation of hook_menu().
+ */
+function uc_gift_wrap_menu() {
+  $items['admin/store/settings/checkout/gift_wrap'] = array(
+    'title' => 'Gift Wrap settings',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('aggregator_form_feed', 2),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('uc_gift_wrap_settings_form'),
+    'access arguments' => array('manage gift wrap options'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 1,
+  );
+
+  return $items;
+}
+
+function uc_gift_wrap_settings_form_submit($form, $form_values) {
+  variable_set('uc_gift_wrap_per_item', $form_state['per_item']);
+  variable_set('uc_gift_wrap_charge', $form_state['charge']);
+}
+
+
+function uc_gift_wrap_settings_form() {
+  $per_item = variable_get('uc_gift_wrap_per_item', 1);
+  $charge = variable_get('uc_gift_wrap_charge', 3.00);
+  $form['per_item'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Charge per item rather than per order'),
+    '#default_value' => $per_item,
+    '#weight' => '1'
+  );
+  $form['charge'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Price per gift wrap'),
+    '#default_value' => $charge,
+    '#weight' => '2'
+  );
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Submit'),
+    '#weight' => '3'
+  );
+  return $form;
+}
+
+/**
+ * Implementation of hook_checkout_pane().
+ */
+function uc_gift_wrap_checkout_pane() {
+  $panes[] = array(
+      'id' => 'up_uc_gift_wrap',
+      'title' => t('Gift wrapping'),
+      'desc' => t('Gift wrapping'),
+      '#collapsed' => TRUE,
+      'callback' => 'uc_checkout_pane_uc_gift_wrap',
+      'weight' => 6,
+    );
+  return $panes;
+}
+
+
+function uc_checkout_pane_uc_gift_wrap($op, &$arg1, $arg2) {
+  switch ($op) {
+    case 'view':
+        $per_item = variable_get('uc_gift_wrap_per_item', 1);
+        $charge = variable_get('uc_gift_wrap_charge', 3.00);
+        $currency_sign = variable_get('uc_currency_sign', '$');
+        $description = t('');
+        $contents['gwcheck'] = array(
+          '#type' => 'checkbox',
+          '#title' => t('Add gift wrapping (' . $currency_sign . number_format($charge, 2) . ($per_item ? ' per item' : '') . ')'),
+          '#description' => t(''),
+          '#default_value' => $arg1->gift_wrap['chk'],
+        );
+        $contents['gwtext'] = array(
+          '#type' => 'textarea',
+          '#maxlength' => 200,
+          '#cols' => 30,
+          '#rows' => 3,
+          '#title' => t('Gift card message (optional)'),
+          '#description' => t(''),
+          '#default_value' => $arg1->gift_wrap['text'],
+        );
+
+        return array('description' => $description, 'contents' => $contents);
+
+    case 'review':
+      if ($arg1->gift_wrap['chk']) {
+      //check if at least one product has gift wrap available and print which ones have available if not all
+      $all_gift_wrappable = TRUE;
+      $any_gift_wrappable = FALSE;
+      $product_names = '';
+      foreach ($arg1->products as $product) {
+        if (_get_gift_wrap_for_product($product->nid)) {
+          $any_gift_wrappable = TRUE;
+          $product_names .= '<br/>- ' . $product->title;
+        }
+        else {
+          $all_gift_wrappable = FALSE;
+        }
+      }
+
+      if (!$any_gift_wrappable) {
+        $msg = t('Note that gift wrapping is not available for this order (you will not be charged)');
+      }
+      else if (!$all_gift_wrappable) {
+        $msg = t('Note that gift wrapping is only available for: ') . $product_names;
+      }
+      else {
+        return;
+      }
+      drupal_add_css(drupal_get_path('module', 'uc_gift_wrap') .'/uc_gift_wrap.css');
+      return '<div class="gift-wrp-msg">' . $msg . '</div>';
+    }
+    
+    return;
+  case 'process':
+
+        $arg1->gift_wrap['chk'] = $arg2['gwcheck'];
+        $arg1->gift_wrap['text'] = $arg2['gwtext'];
+        return TRUE;
+  }
+}
+
+function _uc_gift_wrap_save($order_id, $total_charge, $gift_text = '') {
+  uc_order_line_item_add($order_id, 'gift_wrap', t('Gift wrapping'), $total_charge, 1);
+  db_query("INSERT INTO {uc_gift_wrap} (order_id, gift_text) values(%d, '%s')", $order_id, $gift_text);
+}
+
+function _uc_gift_wrap_load($order_id) {
+  $result = db_query("SELECT order_id, gift_text FROM {uc_gift_wrap} WHERE order_id = %d", $order_id);
+  return db_fetch_object($result);
+}
+
+function _uc_gift_wrap_delete($order_id) {
+  db_query("DELETE FROM {uc_order_line_items} WHERE order_id = %d AND type = 'gift_wrap'", $order_id);
+  db_query("DELETE FROM {uc_gift_wrap} WHERE order_id = %d", $order_id);
+}
+
+
+
+/**
+ *  Hook Order Funtions
+ *  Called from uc_points_payment.inc hook_order
+ */
+ 
+/**
+ * Implementation of hook_line_item().
+ */
+function uc_gift_wrap_line_item() {
+  $items[] = array(
+    'id' => 'gift_wrap',
+    'title' => t('Gift wrapping'),
+    'weight' => 6,
+    'stored' => TRUE,
+    'add_list' => TRUE,
+    'default' => FALSE,
+    'calculated' => TRUE,
+    'display_only' => FALSE,
+  );
+
+  return $items;
+}
+
+/**
+ * Implementation of hook_order().
+ */
+function uc_gift_wrap_order($op, &$arg1) {
+  
+  switch ($op) {
+    case 'save':
+      _uc_gift_wrap_delete($arg1->order_id);
+      if ($arg1->gift_wrap['chk']) {
+        $per_item = variable_get('uc_gift_wrap_per_item', 1);
+        $charge = variable_get('uc_gift_wrap_charge', 3.00);
+        if ($per_item) {
+          //charge per item - count number of items in order
+          foreach ($arg1->products as $product) {
+            $total_charge += $product->qty * $charge;
+          }
+        } 
+        else {
+          $total_charge = $charge;
+        }   
+        _uc_gift_wrap_save($arg1->order_id, $total_charge, $arg1->gift_wrap['text']);
+      }
+      break;
+    case 'load':
+      if ($gift_wrap = _uc_gift_wrap_load($arg1->order_id)) {
+        $arg1->gift_wrap['text'] = $gift_wrap->gift_text;
+        $arg1->gift_wrap['chk'] = 1;
+      }
+      break;
+    case 'submit':
+      // add gift message as order comment so it can be seen on store admin order detail page
+      if ($gift_wrap = _uc_gift_wrap_load($arg1->order_id)) {
+        uc_order_comment_save($arg1->order_id, $arg1->uid, t('Gift message:') . ' "' . $gift_wrap->gift_text . '"', 'order');
+      }
+      break;
+
+    //case 'total':
+    case 'delete':
+      //clean up
+      _uc_gift_wrap_delete($arg1->order_id);
+      break;
+  }
+} 
+
+function _get_gift_wrap_for_product($nid) {
+  $sql = "SELECT gift_wrap_available FROM {uc_gift_wrap_node} WHERE nid = %d";  
+  $results = db_query($sql, $nid);
+  if ($gift_wrap_available = db_fetch_object($results)) {  
+    return $gift_wrap_available->gift_wrap_available;
+  }
+  else { //defaults to 1
+    return 1;
+  }
+}
+
+
+/**
+ * Implementation of hook_form_alter().
+ *
+ * Add a form element for the gift wrap checkbox
+ */
+function uc_gift_wrap_form_alter($form_id, &$form) {
+  $node = $form['#node'];
+  $product_types = module_invoke_all('product_types');
+  if ((is_object($node) && $form_id == $node->type .'_node_form') && in_array($node->type, $product_types)) {
+    $form['gift_wrap'] = array('#type' => 'checkbox',
+          '#title' => 'Gift wrap',
+          '#default_value' => $node->nid ? $node->gift_wrap : 1,
+          '#description' => t('Gift wrap available'),
+          '#weight' => 0,
+        );
+  }
+}
+
+
+/**
+ * Implementation of hook_nodeapi().
+ */
+function uc_gift_wrap_nodeapi(&$node, $op) {
+  if (in_array($node->type, module_invoke_all('product_types'))) {
+    switch ($op) {
+      case 'insert':
+      case 'update':
+        db_query("DELETE FROM {uc_gift_wrap_node} WHERE nid = %d", $node->nid);
+        db_query("INSERT INTO {uc_gift_wrap_node} (nid, gift_wrap_available) VALUES (%d, %d)",
+                $node->nid, $node->gift_wrap);   
+        break;
+      case 'load':
+        $return = array('gift_wrap' => array());
+        //print(_get_gift_wrap_for_product($node->nid));
+        $return['gift_wrap'] = _get_gift_wrap_for_product($node->nid);
+        return $return;
+      break;
+      case 'delete':
+        db_query("DELETE FROM {uc_gift_wrap_node} WHERE nid = %d", $node->nid);
+      break;
+      case 'delete revision':
+        //db_query("DELETE FROM {gift_wrap_available} WHERE vid = %d", $node->vid);
+      break;
+    }
+  }
+}
+

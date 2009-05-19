@@ -1,0 +1,11 @@
+; $Id $
+
+; Module adapted by Sundar for Drupal 6
+name = "UC Gift Wrap"
+description = "Gift wrap option during checkout."
+dependencies[] = uc_store
+core = 6.x
+version = "6.x-1.x-dev"
+project = "uc_gift_wrap"
+datestamp = "1242762525"
+
